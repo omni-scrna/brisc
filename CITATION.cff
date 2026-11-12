@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this module in your publication, please cite as below."
+type: software
+title: "brisc module"
+abstract: |
+  brisc (Wainberg lab) PCA, kNN and Leiden arms for the omni-scrna split-stages plan
+authors:
+  - family-names: "ben"
+    given-names: ""
+    email: "ben.uzh@proton.me"
+date-released: "2026-11-12"
+version: "0.1.0"
+license: MIT
+url: "https://github.com/omni-scrna/brisc"
+repository-code: "https://github.com/omni-scrna/brisc"
+keywords:
+  - bioinformatics
+  - computational-biology
+  - benchmark
+  - omnibenchmark
+  - module
+references:
+  - title: "brisc: fast single-cell toolkit"
+    authors:
+      - family-names: "Wainberg"
+        given-names: "Michael"
+    type: software
+    version: "0.2.5"
+    url: "https://github.com/briscverse/brisc"
