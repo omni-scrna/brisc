@@ -10,6 +10,11 @@ omni-scrna split-stages plan, api 0.8.
 | `knn` | NNG | `SingleCell.neighbors()` + `shared_neighbors()` | `n_neighbors`, `random_seed` |
 | `cluster` | CLUST | `SingleCell.cluster()` | `resolution`, `random_seed`, `min_cluster_size` (default 5) |
 
+Every entrypoint also takes `cpu_variant`: `auto` (default, brisc's own pick) or
+`x86_64_v2` / `x86_64_v3` / `x86_64_v4`, the brisc build to run. All three ship in
+the one install; the job exits if the CPU cannot run the level asked for. The
+builds differ in the last float32 digits (PCA scores ~1e-4 on tests/data).
+
 Everything not listed is left at the brisc default.
 
 What differs from the sibling arms:
