@@ -24,9 +24,10 @@ import h5py
 import numpy as np
 import polars as pl
 import scipy.sparse as sp
-from brisc import SingleCell
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+import cpu_variant  # noqa: E402  (before brisc: it picks the build at import)
+from brisc import SingleCell  # noqa: E402
 from common import cli  # noqa: E402
 from threads import NUM_THREADS  # noqa: E402
 
@@ -40,6 +41,7 @@ def parse_args():
     p.add_argument("--n_neighbors", type=int, required=True,
                    help="neighbourhood size, the cell itself included")
     p.add_argument("--random_seed", type=int, required=True)
+    cpu_variant.add_arg(p)
     return p.parse_args()
 
 
@@ -68,6 +70,7 @@ def write_csr(grp, m):
 def main():
     args = parse_args()
     print(f"Full command: {' '.join(sys.argv)}")
+    print(f"  brisc build: {cpu_variant.loaded()} (--cpu_variant {args.cpu_variant})")
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     df = pl.read_csv(args.embedding_tsv, separator="\t")   # first column = cell ids

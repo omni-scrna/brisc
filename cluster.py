@@ -19,9 +19,10 @@ import h5py
 import numpy as np
 import polars as pl
 import scipy.sparse as sp
-from brisc import SingleCell
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+import cpu_variant  # noqa: E402  (before brisc: it picks the build at import)
+from brisc import SingleCell  # noqa: E402
 from common import cli  # noqa: E402
 
 
@@ -35,6 +36,7 @@ def parse_args():
     p.add_argument("--random_seed", type=int, required=True)
     p.add_argument("--min_cluster_size", type=int, default=5,
                    help="brisc default; 1 disables the small-cluster merge")
+    cpu_variant.add_arg(p)
     return p.parse_args()
 
 
@@ -69,6 +71,7 @@ def run_cluster(connectivities, neighbors, cells, resolution, seed, min_cluster_
 def main():
     args = parse_args()
     print(f"Full command: {' '.join(sys.argv)}")
+    print(f"  brisc build: {cpu_variant.loaded()} (--cpu_variant {args.cpu_variant})")
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     with h5py.File(args.neighbors_h5, "r") as h5:

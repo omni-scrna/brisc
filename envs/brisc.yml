@@ -9,6 +9,8 @@ dependencies:
 - numpy >=2,<3
 - scipy >=1.16,<2
 - polars >=1.43,<2
+- c-compiler
+- cxx-compiler
 - pip
 - pip:
-  - brisc==0.2.5
+  - brisc @ git+https://github.com/btraven00/brisc@e8073e8de95a8c3f16285022e2ff534b0b2a590d

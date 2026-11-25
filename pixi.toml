@@ -17,7 +17,12 @@ numpy = ">=2,<3"
 scipy = ">=1.16,<2"
 polars = ">=1.43,<2"
 
-# PyPI wheel, not the conda-forge build: that one hard-depends on r-seurat
-# (the whole R stack) for the Seurat converters, which no entrypoint here uses.
+# compilers: the fork below builds from source (~21 min, three x86-64 levels)
+c-compiler = "*"
+cxx-compiler = "*"
+
+# Not the conda-forge build: that one hard-depends on r-seurat (the whole R
+# stack) for the Seurat converters, which no entrypoint here uses.
+# Fork of brisc 0.2.6+ adding pca(scale=False); back to PyPI once upstream has it.
 [pypi-dependencies]
-brisc = "==0.2.5"
+brisc = { git = "https://github.com/btraven00/brisc", rev = "e8073e8de95a8c3f16285022e2ff534b0b2a590d" }
