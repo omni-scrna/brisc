@@ -45,6 +45,15 @@ with tempfile.TemporaryDirectory() as out:
     assert np.allclose(np.abs(E), np.abs(U[:, :K] * S[:K]), atol=1e-3 * S[0])
     assert np.allclose(np.abs(V), np.abs(Vt[:K].T), atol=1e-3)
 
+    # --scale false: a centred-only SVD
+    run("pca.py", out / "c", "--normalized_selected_h5", H5, "--n_components", K,
+        "--random_seed", 42, "--scale", "false")
+    _, Ec = table(out / "c" / "t_embedding.tsv")
+    _, Vc = table(out / "c" / "t_loadings.tsv")
+    U, S, Vt = np.linalg.svd(X - X.mean(0), full_matrices=False)
+    assert np.allclose(np.abs(Ec), np.abs(U[:, :K] * S[:K]), atol=1e-3 * S[0])
+    assert np.allclose(np.abs(Vc), np.abs(Vt[:K].T), atol=1e-3)
+
     # kNN: n_neighbors - 1 Euclidean neighbours per cell, near-exact, symmetric SNN
     run("knn.py", out, "--embedding_tsv", out / "t_embedding.tsv", "--n_neighbors", NN, "--random_seed", 42)
     with h5py.File(out / "t_neighbors.h5") as h5:

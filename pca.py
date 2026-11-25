@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """PCA stage, brisc-backed: SingleCell.pca() (IRLBA, float32).
 
-Not the same estimand as the sibling arms: brisc scales every gene to zero mean
-AND unit variance (ddof=1) inside pca(), with no switch to turn it off. The
-scanpy / scrapper / rapids arms only centre. Scores are U*S.
+brisc scales every gene to zero mean AND unit variance (ddof=1) inside pca()
+by default. --scale false (pca(scale=False), btraven00/brisc fork) only centres,
+the estimand of the scanpy / scrapper / rapids arms. Scores are U*S.
 
 Outputs: embedding_tsv (cells x k, PC1..PCk), loadings_tsv (genes x k).
 brisc returns scores only; the loadings are recovered exactly from them as
-V = Z'E / s^2 (Z the standardised matrix, E the scores, s^2 = colSums(E^2)),
+V = Z'E / s^2 (Z the centred or standardised matrix, E the scores, s^2 = colSums(E^2)),
 without densifying Z.
 """
 
@@ -32,6 +32,8 @@ def parse_args():
     cli.add_stage_args(p, "PCA")  # --normalized_selected_h5
     p.add_argument("--n_components", type=int, required=True)
     p.add_argument("--random_seed", type=int, required=True)
+    p.add_argument("--scale", choices=["true", "false"], default="true",
+                   help="unit-variance genes first (brisc default)")
     return p.parse_args()
 
 
@@ -45,19 +47,19 @@ def read_matrix(path):
                 g["barcodes"][:].astype(str), g["genes"][:].astype(str))
 
 
-def run_pca(X, cells, genes, n_components, seed):
+def run_pca(X, cells, genes, n_components, seed, scale):
     sc = SingleCell(X=X, obs=pl.DataFrame({"cell_id": cells}),
                     var=pl.DataFrame({"gene_id": genes}), num_threads=NUM_THREADS)
     sc.uns["normalized"] = True   # the NORM stage did it; pca() checks the flag
     sc = sc.pca(QC_column=None, hvg_column=None, num_PCs=n_components, seed=seed,
-                verbose=True)
+                scale=scale, verbose=True)
     E = sc.obsm["pca"].astype(np.float64)
 
     # loadings: V = Z'E / s^2 with Z = (X - mu) / sd, kept sparse
     X = sp.csr_array(X, dtype=np.float64)
     n = X.shape[0]
     mu = X.sum(axis=0) / n
-    sd = np.sqrt((X.multiply(X).sum(axis=0) - n * mu**2) / (n - 1))
+    sd = np.sqrt((X.multiply(X).sum(axis=0) - n * mu**2) / (n - 1)) if scale else np.ones(X.shape[1])
     ZtE = X.T @ E - np.outer(mu, E.sum(axis=0))
     # a constant gene has no standardised value: it carries no loading
     V = np.divide(ZtE, sd[:, None], out=np.zeros_like(ZtE), where=sd[:, None] > 0)
@@ -79,7 +81,8 @@ def main():
 
     X, cells, genes = read_matrix(args.normalized_selected_h5)
     print(f"  matrix (cells x genes): {X.shape}, threads: {NUM_THREADS}")
-    E, V = run_pca(X, cells, genes, args.n_components, args.random_seed)
+    E, V = run_pca(X, cells, genes, args.n_components, args.random_seed,
+                   args.scale == "true")
     assert E.shape == (len(cells), args.n_components) and np.isfinite(E).all()
     assert V.shape == (len(genes), args.n_components)
 
