@@ -10,6 +10,16 @@ Output neighbors_h5, the layout every CLUST arm and graph metric reads:
   /data /indices /indptr                  kNN distances, CSR, at the root
   /connectivities/{data,indices,indptr}   SNN Jaccard weights, CSR, symmetric
 
+--connectivities sets the edge weights written as /connectivities, on the same
+neighbours:
+  native  brisc's shared_neighbors() (today's behaviour, the default).
+  snn     Seurat's SNN as every kNN module writes it: |N_i & N_j| / |N_i | N_j| over
+          neighbour sets with each cell itself included, edges below --snn_prune
+          (default 1/15, Seurat's prune.SNN) removed, diagonal 1.
+  umap    UMAP's fuzzy simplicial set (umap-learn's fuzzy_simplicial_set with its
+          defaults, the weights scanpy and rapids-singlecell write), computed here
+          from the neighbours so umap-learn is not a dependency.
+
 Two conversions to the stage's conventions, both scanpy's:
   - n_neighbors counts the cell itself, brisc's num_neighbors does not, so
     num_neighbors = n_neighbors - 1 (the same row degree as nn_scanpy).
@@ -40,7 +50,83 @@ def parse_args():
     p.add_argument("--n_neighbors", type=int, required=True,
                    help="neighbourhood size, the cell itself included")
     p.add_argument("--random_seed", type=int, required=True)
+    p.add_argument("--connectivities", choices=["native", "snn", "umap"], default="native",
+                   help="edge weights: native (brisc's shared_neighbors), snn (Seurat's SNN) or umap")
+    p.add_argument("--snn_prune", type=float, default=1 / 15,
+                   help="--connectivities snn: drop edges below this Jaccard index (Seurat's prune.SNN)")
     return p.parse_args()
+
+
+def snn_connectivities(distances, prune=1 / 15):
+    """Seurat's SNN graph from a kNN graph's neighbour sets (its stored entries, each cell
+    itself added): the Jaccard index |N_i & N_j| / |N_i | N_j| for every pair sharing a
+    neighbour, entries below `prune` dropped. Symmetric, diagonal 1."""
+    n = distances.shape[0]
+    a = sp.csr_matrix((np.ones(distances.nnz, dtype=np.float32), distances.indices.copy(),
+                       distances.indptr.copy()), shape=(n, n))
+    a = ((a + sp.identity(n, dtype=np.float32, format="csr")) > 0).astype(np.float32)
+    k = np.asarray(a.sum(axis=1)).ravel()
+    shared = (a @ a.T).tocoo()
+    jac = shared.data / (k[shared.row] + k[shared.col] - shared.data)
+    keep = jac >= prune
+    return sp.csr_matrix((jac[keep], (shared.row[keep], shared.col[keep])), shape=(n, n))
+
+
+def umap_connectivities(idx, dist, n_iter=64, bandwidth=1.0, local_connectivity=1.0):
+    """UMAP's fuzzy simplicial set (umap-learn's fuzzy_simplicial_set with its defaults)
+    from each cell's k neighbours, itself first at distance 0 (idx, dist: n x k)."""
+    n, k = idx.shape
+    target = np.log2(k) * bandwidth
+    rho = np.zeros(n)
+    sigma = np.ones(n)
+    mean_all = dist.mean()
+    for i in range(n):
+        d = dist[i]
+        nz = d[d > 0]
+        if len(nz) >= local_connectivity:
+            j = int(np.floor(local_connectivity))
+            frac = local_connectivity - j
+            if j > 0:
+                rho[i] = nz[j - 1] + (frac * (nz[j] - nz[j - 1]) if frac > 1e-5 else 0)
+            else:
+                rho[i] = frac * nz[0]
+        elif len(nz) > 0:
+            rho[i] = nz.max()
+        lo, hi, mid = 0.0, np.inf, 1.0
+        for _ in range(n_iter):
+            psum = np.exp(-np.maximum(d[1:] - rho[i], 0) / mid).sum()
+            if abs(psum - target) < 1e-5:
+                break
+            if psum > target:
+                hi = mid
+                mid = (lo + hi) / 2
+            else:
+                lo = mid
+                mid = mid * 2 if hi == np.inf else (lo + hi) / 2
+        if rho[i] > 0:
+            mid = max(mid, 1e-3 * d.mean())
+        else:
+            mid = max(mid, 1e-3 * mean_all)
+        sigma[i] = mid
+    w = np.exp(-np.maximum(dist - rho[:, None], 0) / sigma[:, None])
+    w[idx == np.arange(n)[:, None]] = 0
+    p = sp.csr_matrix((w.ravel(), (np.repeat(np.arange(n), k), idx.ravel())), shape=(n, n))
+    p.eliminate_zeros()
+    pt = p.T.tocsr()
+    return (p + pt - p.multiply(pt)).tocsr()
+
+
+def with_self(distances):
+    """Each cell's neighbours as dense (n x k) index and distance arrays, itself first at
+    distance 0, the rest nearest first: the input umap_connectivities expects."""
+    n = distances.shape[0]
+    k = np.diff(distances.indptr)[0]
+    idx = distances.indices.reshape(n, k)
+    dst = distances.data.reshape(n, k)
+    order = np.argsort(dst, axis=1, kind="stable")
+    idx, dst = np.take_along_axis(idx, order, 1), np.take_along_axis(dst, order, 1)
+    return (np.hstack([np.arange(n)[:, None], idx]),
+            np.hstack([np.zeros((n, 1)), dst]))
 
 
 def run_knn(embedding, cells, n_neighbors, seed):
@@ -75,6 +161,10 @@ def main():
     distances, connectivities = run_knn(df[:, 1:].to_numpy(), cells,
                                         args.n_neighbors, args.random_seed)
     assert (np.diff(distances.indptr) == args.n_neighbors - 1).all()
+    if args.connectivities == "snn":
+        connectivities = snn_connectivities(distances, args.snn_prune)
+    elif args.connectivities == "umap":
+        connectivities = umap_connectivities(*with_self(distances))
 
     oid = "neighbors_corrected_h5" if "neighbors_corrected_h5" in dict(args.outputs) else "neighbors_h5"
     out = cli.output_path(args, oid, "_neighbors.h5")
@@ -82,7 +172,7 @@ def main():
         h5.create_dataset("cell_ids", data=np.array(cells, dtype="S"))
         write_csr(h5, distances)
         write_csr(h5.create_group("connectivities"), connectivities)
-    print(f"  wrote: {out} ({distances.nnz} kNN edges, {connectivities.nnz} SNN edges)")
+    print(f"  wrote: {out} ({distances.nnz} kNN edges, {connectivities.nnz} {args.connectivities} edges)")
 
 
 if __name__ == "__main__":
