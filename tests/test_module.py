@@ -63,6 +63,39 @@ with tempfile.TemporaryDirectory() as out:
     assert np.isclose(D.data[0], np.linalg.norm(E[0] - E[i]), rtol=1e-4)   # not squared
     assert abs(C - C.T).max() == 0 and C.data.min() > 0 and C.data.max() <= 1
 
+    # --connectivities: the same neighbours, other weights
+    def graph(tag, *extra):
+        (out / tag).mkdir()
+        run("knn.py", out / tag, "--embedding_tsv", out / "t_embedding.tsv", "--n_neighbors", NN,
+            "--random_seed", 42, *extra)
+        with h5py.File(out / tag / "t_neighbors.h5") as h5:
+            d = sp.csr_array((h5["data"][:], h5["indices"][:], h5["indptr"][:]), shape=(n, n))
+            c = h5["connectivities"]
+            return d, sp.csr_array((c["data"][:], c["indices"][:], c["indptr"][:]), shape=(n, n))
+
+    D_snn, C_snn = graph("snn", "--connectivities", "snn")
+    D_umap, C_umap = graph("umap", "--connectivities", "umap")
+    assert (D_snn != D).nnz == 0 and (D_umap != D).nnz == 0
+    # snn: Seurat's Jaccard of neighbour sets, each cell itself included, pruned at 1/15
+    sets = [set(D.indices[D.indptr[i]:D.indptr[i + 1]]) | {i} for i in range(n)]
+    for i in range(50):
+        for j in range(n):
+            want = len(sets[i] & sets[j]) / len(sets[i] | sets[j])
+            assert np.isclose(C_snn[i, j], want if want >= 1 / 15 else 0, atol=1e-6)
+    assert abs(C_snn - C_snn.T).max() < 1e-6 and np.allclose(C_snn.diagonal(), 1)
+    # umap: symmetric weights in (0, 1], umap-learn's when it is installed
+    assert abs(C_umap - C_umap.T).max() < 1e-12 and C_umap.data.min() > 0 and C_umap.data.max() <= 1
+    try:
+        from umap.umap_ import fuzzy_simplicial_set
+    except ImportError:
+        pass
+    else:
+        sys.path.insert(0, str(ROOT))
+        from knn import with_self
+        idx, dst = with_self(D)
+        ref, _, _ = fuzzy_simplicial_set(E, NN, 0, "euclidean", knn_indices=idx, knn_dists=dst)
+        assert abs(ref - C_umap).max() < 1e-4
+
     # Leiden: every cell labelled, same seed = same partition, resolution moves k
     def clusters(tag, res, *extra):
         run("cluster.py", out / tag, "--neighbors_h5", out / "t_neighbors.h5",
